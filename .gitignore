@@ -1,0 +1,4 @@
+.vagrant
+*/.vagrant/*
+downloads/*
+*.retry

@@ -1,0 +1,6 @@
+[hadoop_master]
+XX.XX.XX.XX  name=master
+
+[hadoop_workers]
+XX.XX.XX.XX  name=slave1
+XX.XX.XX.XX  name=slave2

@@ -1,0 +1,381 @@
+- name: Provision all
+  hosts: hadoop_master
+  remote_user: vagrant
+  become: yes
+  become_method: sudo
+  gather_facts: no
+
+  vars:
+    hadoop_folder: /opt/hadoop
+    default_folder: /home/hduser
+    hadoop_with_version: hadoop-2.9.2
+    hadoop_folder_final: /opt/hadoop
+    hadoop_conf_dir: "{{ hadoop_folder_final }}/etc/hadoop"
+    java_home: /usr/lib/jvm/java-1.8.0-openjdk-1.8.0.232.b09-0.el7_7.x86_64
+    mapred_site_props: <?xml version="1.0"?><?xml-stylesheet type="text/xsl" href="configuration.xsl"?><configuration><property><name>mapreduce.framework.name</name><value>yarn</value></property></configuration>
+
+  tasks:
+  - name: checa se o ipv6 esta disabled.
+    shell: cat /proc/sys/net/ipv6/conf/all/disable_ipv6
+    register: ipv6_is_disabled
+
+  - name: disabling ipv6
+    blockinfile:
+      dest: /etc/sysctl.conf
+      content: |
+        net.ipv6.conf.all.disable_ipv6 = 1
+        net.ipv6.conf.default.disable_ipv6 = 1
+        net.ipv6.conf.lo.disable_ipv6 = 1
+    when: ipv6_is_disabled.stdout.find('0') != -1
+
+  - name: se esta habilitado o ipv6, reboota
+    shell: reboot
+    async: 0
+    poll: 0
+    when: ipv6_is_disabled.stdout.find('0') != -1
+
+  - name: Waiting for reboot
+    sudo: no
+    local_action: wait_for host=hadoop_master state=started delay=10 timeout=60
+    when: ipv6_is_disabled.stdout.find('0') != -1
+
+  - name: setting hosts -- master
+    lineinfile: 
+      dest: '/etc/hosts'
+      line: "{{ hostvars[item]['inventory_hostname'] }}      {{ hostvars[item]['name'] }}"
+    with_items: "{{ groups['hadoop_master'] }}"
+
+  - name: setting hosts -- slaves
+    lineinfile: 
+      dest: '/etc/hosts'
+      line: "{{ hostvars[item]['inventory_hostname'] }}      {{ hostvars[item]['name'] }}"
+    with_items: "{{ groups['hadoop_workers'] }}"
+
+  - name: install openjdk 8
+    yum: name=java-1.8.0-openjdk-devel.x86_64 state=latest update_cache=yes
+
+  - name: addgroup hadoop
+    group:
+      name: hadoop
+      state: present    
+
+  - name: addgroup hadoop
+    group:
+      name: hadoop
+      state: present    
+
+  - name: Adding user hduser
+    user: 
+      name: hduser
+      password: $6$i1X5M6lS$.sYSalRHezB6/HI.dcuK8of5dfwFaATO3wHMLMcy76yvAF1DUMHKxGSMa0PpNGYBxnTFJvzEG3CTyEhsk9qU5/
+      shell: /bin/bash
+      groups: hadoop
+      append: yes
+
+  - name: "creating .ssh directory"
+    file:
+      path: /home/hduser/.ssh
+      state: directory
+      owner: hduser
+      group: hduser
+      mode: 0700
+
+  - name: "copyind id_rsa.pub from local machine to remote machine as authorized_keys"
+    copy:
+      src: /home/zem/.ssh/
+      dest: /home/hduser/.ssh/  
+      owner: hduser
+      group: hduser
+      remote_src: no
+      mode: 0700
+
+  - name: "copyind id_rsa.pub from local machine to remote machine as authorized_keys"
+    copy:
+      src: /home/zem/.ssh/id_rsa.pub
+      dest: /home/hduser/.ssh/authorized_keys
+      owner: hduser
+      group: hduser
+      remote_src: no
+      mode: 0600
+
+  - name: extracting hadoop
+    unarchive:
+      src: http://ftp.unicamp.br/pub/apache/hadoop/common/hadoop-2.9.2/hadoop-2.9.2.tar.gz
+      dest: "/opt"
+      copy: no
+      creates: "/opt/hadoop"
+      group: hadoop
+      owner: hduser
+
+  - name: moving hadoop to correct path (1)
+    stat: path=/opt/hadoop-2.9.2
+    register: hadoop_292
+
+  - name: moving hadoop to correct path (2)
+    command: mv /opt/hadoop-2.9.2 /opt/hadoop
+    when: hadoop_292.stat.exists
+
+  - name: setting vars on /etc/profile
+    blockinfile:
+      dest: "/etc/profile"
+      content: |
+        export HADOOP_HOME={{ hadoop_folder_final }}
+        export HADOOP_INSTALL=$HADOOP_HOME
+        export HADOOP_MAPRED_HOME=$HADOOP_HOME
+        export HADOOP_COMMON_HOME=$HADOOP_HOME
+        export HADOOP_HDFS_HOME=$HADOOP_HOME
+        export YARN_HOME=$HADOOP_HOME
+        export HADOOP_COMMON_LIB_NATIVE_DIR=$HADOOP_HOME/lib/native
+        export PATH=$PATH:$HADOOP_HOME/sbin:$HADOOP_HOME/bin
+
+  - name: reloading conf
+    shell: "source /etc/profile"
+
+  - name: Create nn
+    file: 
+      path: /hadoop/nn 
+      state: directory
+      owner: hduser
+      group: hadoop   
+      mode: "u+rwx,g+rx,o-rwx"
+      recurse: yes      
+
+  - name: Create snn
+    file: 
+      path: /hadoop/snn 
+      state: directory
+      owner: hduser
+      group: hadoop   
+      mode: "u+rwx,g+rx,o-rwx"
+      recurse: yes      
+
+  - name: Create dn
+    file: 
+      path: /hadoop/dn 
+      state: directory
+      owner: hduser
+      group: hadoop   
+      mode: "u+rwx,g+rx,o-rwx"
+      recurse: yes      
+
+  - name: Create mapred/system
+    file: 
+      path: /hadoop/mapred/system 
+      state: directory
+      owner: hduser
+      group: hadoop   
+      mode: "u+rwx,g+rx,o-rwx"
+      recurse: yes      
+
+  - name: Create mapred/local
+    file: 
+      path: /hadoop/mapred/local
+      state: directory
+      owner: hduser
+      group: hadoop   
+      mode: "u+rwx,g+rx,o-rwx"
+      recurse: yes      
+
+  - name: checa se hadoop_home is setted
+    shell: "echo $HADOOP_HOME"
+    register: hadoop_home
+  
+  - name: setting hadoop-env.sh
+    lineinfile: dest="{{ hadoop_conf_dir }}/hadoop-env.sh"
+                line="export JAVA_HOME=${JAVA_HOME}"
+                state=absent
+
+  - name: setting hadoop-env.sh
+    lineinfile: dest="{{ hadoop_conf_dir }}/hadoop-env.sh"
+                line="export JAVA_HOME={{ java_home }}"
+                state=present
+
+  - name: Updating hdfs-site.xml
+    blockinfile:
+      dest: "{{ hadoop_conf_dir }}/hdfs-site.xml"
+      content: |
+        <property>
+            <name>dfs.replication</name>
+            <value>1</value>
+        </property>
+        <property>
+            <name>dfs.name.dir</name>
+            <value>file:///hadoop/nn</value>
+        </property>
+        <property>
+            <name>dfs.data.dir</name>
+            <value>file:///hadoop/dn</value>
+        </property>
+        <property>
+            <name>dfs.namenode.checkpoint.dir</name>
+            <value>file:///hadoop/snn</value>
+        </property>
+      insertbefore: "</configuration>"
+
+
+  - name: Updating core-site.xml
+    blockinfile:
+      dest: "{{ hadoop_conf_dir }}/core-site.xml"
+      content: |
+        <property>
+          <name>fs.default.name</name>
+          <value>hdfs://master:9000</value>
+          <description>The name of the default file system.  A URI whose scheme and authority determine the FileSystem implementation.  The uri's scheme determines the config property (fs.SCHEME.impl) naming the FileSystem implementation class.  The uri's authority is used to determine the host, port, etc. for a filesystem.</description>
+        </property>
+      insertbefore: "</configuration>"
+
+  - name: creating mapred-site.xml
+    copy:
+      content: ""
+      dest: "{{ hadoop_conf_dir }}/mapred-site.xml"
+      force: no
+
+  - name: Updating mapred-site.xml
+    lineinfile: dest="{{ hadoop_conf_dir }}/mapred-site.xml"
+                line="{{ mapred_site_props }}"
+                state=present
+
+  - name: Updating yarn-site.xml
+    blockinfile:
+      dest: "{{ hadoop_conf_dir }}/yarn-site.xml"
+      content: |
+        <property>
+            <name>yarn.resourcemanager.hostname</name>
+            <value>master</value>
+        </property>
+        <property>
+            <name>yarn.nodemanager.aux-services</name>
+            <value>mapreduce_shuffle</value>
+        </property>
+        <property>
+            <name>yarn.nodemanager.aux-services.mapreduce.shuffle.class</name>
+            <value>org.apache.hadoop.mapred.ShuffleHandler</value>
+        </property>
+        <property>
+            <name>yarn.nodemanager.pmem-check-enabled</name>
+            <value>false</value>
+        </property>
+
+        <property>
+            <name>yarn.nodemanager.vmem-check-enabled</name>
+            <value>false</value>
+        </property>        
+      insertbefore: "</configuration>"
+
+  - name: Updating conf/slaves
+    lineinfile: 
+      dest: "{{ hadoop_conf_dir }}/slaves"
+      line: "localhost"
+      state: absent
+
+  - name: Updating conf/slaves
+    lineinfile: 
+      dest: "{{ hadoop_conf_dir }}/slaves"
+      line: "{{ hostvars[item]['name'] }}"
+    with_items: "{{ groups['hadoop_workers'] }}"
+
+  - name: Download scala
+    get_url:
+      url: https://downloads.lightbend.com/scala/2.12.10/scala-2.12.10.rpm
+      dest: /home/hduser/scala.rpm
+      mode: '0666'
+
+  - name: Install scala
+    yum:
+      name: "/home/hduser/scala.rpm"
+      state: present
+
+  - name: "creating spark directory"
+    file:
+      path: /opt/spark
+      state: directory
+      owner: hduser
+      group: hadoop
+      mode: 0777
+
+  - name: extracting spark
+    unarchive:
+      src: http://ftp.unicamp.br/pub/apache/spark/spark-2.4.4/spark-2.4.4-bin-hadoop2.7.tgz
+      dest: "/opt/spark"
+      copy: no
+      creates: "/opt/spark/spark-2.4.4-bin-hadoop2.7"
+      group: hadoop
+      owner: hduser
+
+  - name: setting env var | bashrc
+    lineinfile: 
+      dest: '/etc/profile'
+      line: "export SPARK_HOME=/opt/spark/spark-2.4.4-bin-hadoop2.7"
+
+  - name: reloading conf
+    shell: "source /etc/profile"
+
+  - name: "create spark-env.sh file"
+    copy:
+      src: /opt/spark/spark-2.4.4-bin-hadoop2.7/conf/spark-env.sh.template
+      dest: /opt/spark/spark-2.4.4-bin-hadoop2.7/conf/spark-env.sh
+      owner: hduser
+      group: hduser
+      remote_src: yes
+      mode: 0700
+
+  - name: "setting spark-env.sh file"
+    blockinfile:
+      dest: /opt/spark/spark-2.4.4-bin-hadoop2.7/conf/spark-env.sh
+      content: |
+        SPARK_JAVA_OPTS=-Dspark.driver.port=53411
+        HADOOP_CONF_DIR=$HADOOP_HOME/etc/hadoop/
+        SPARK_MASTER_IP=master
+
+  - name: "create spark-defaults.conf file"
+    copy:
+      src: /opt/spark/spark-2.4.4-bin-hadoop2.7/conf/spark-defaults.conf.template
+      dest: /opt/spark/spark-2.4.4-bin-hadoop2.7/conf/spark-defaults.conf
+      owner: hduser
+      group: hduser
+      remote_src: yes
+      mode: 0700
+
+  - name: "setting spark-defaults.sh file"
+    blockinfile:
+      dest: /opt/spark/spark-2.4.4-bin-hadoop2.7/conf/spark-defaults.conf
+      content: |
+        spark.master            spark://master:7077
+        spark.serializer        org.apache.spark.serializer.KryoSerializer
+
+  - name: "creating spark logs directory"
+    file:
+      path: /opt/spark/spark-2.4.4-bin-hadoop2.7/logs
+      state: directory
+      owner: hduser
+      group: hduser
+      mode: 0700
+
+  - name: "creating spark work directory"
+    file:
+      path: /opt/spark/spark-2.4.4-bin-hadoop2.7/work
+      state: directory
+      owner: hduser
+      group: hduser
+      mode: 0700
+
+  - name: creating spark slaves file
+    copy:
+      content: ""
+      dest: /opt/spark/spark-2.4.4-bin-hadoop2.7/conf/slaves
+      force: no
+      owner: hduser
+      group: hduser
+      mode: 0700
+
+  - name: Updating conf/slaves for spark
+    lineinfile: 
+      dest: /opt/spark/spark-2.4.4-bin-hadoop2.7/conf/slaves
+      line: "localhost"
+      state: absent
+
+  - name: Updating conf/slaves for spark
+    lineinfile: 
+      dest: /opt/spark/spark-2.4.4-bin-hadoop2.7/conf/slaves
+      line: "{{ hostvars[item]['name'] }}"
+    with_items: "{{ groups['hadoop_workers'] }}"
